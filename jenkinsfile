@@ -1,0 +1,145 @@
+pipeline {
+  agent any
+  environment{
+          OC_LOGIN = credentials("oc_login")
+          OC_LOGIN_NEW = credentials("oc_login_new")
+          IBM_ENTITLEMENT_KEY = credentials("ibm_entitlement_key")
+          //NAMESPACE = params.chooseNode
+          GITREPO = "https://github.com/qtechsavy/test-101.git"
+          GITBRNACH = "master"
+      }
+
+stages {
+  stage('Setup parameters') {
+            steps {
+                script { 
+                    properties([
+                        parameters([
+                            choice(
+                                choices: ['Green', 'Blue'], 
+                                name: 'ENV_NAMESPACE'
+                            )
+                        ])
+                    ])
+                }
+            }
+        }
+  
+  stage ('Define Branch') {
+    steps {
+      script {
+        if (params.ENV_NAMESPACE == 'Green') {
+          GITBRANCH = "latest-repo"
+          sh "echo branch - ${GITBRANCH}"
+          sleep 1
+        } 
+        if (params.ENV_NAMESPACE == 'Blue') {
+          GITBRANCH = "blue-branch"
+          sh "echo branch - ${GITBRANCH}"
+          sleep 1
+        } 
+      }
+    }
+
+  }
+
+  stage('Checkout Branch') {
+    steps {
+    // Get Source Code from SCM (Git) as configured in the Jenkins Project
+    // Next line for inline script, "checkout scm" for Jenkinsfile from Gogs
+    git url: "${GITREPO}", branch: "${GITBRANCH}"
+    //checkout([$class: 'GitSCM', branches: [[name: BRANCH ]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: '']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'myJenkinsCredentials', url: 'ssh://git@bitbucket.myhost.com' ]] ])
+    //checkout scm
+    }
+  }
+  
+  stage('Pre-deploy requirements') {
+    steps {
+    //sh "NAMESPACE=$(echo ${params.ENV_NAMESPACE} | tr '[:upper:]' '[:lower:]')"
+    //sh "echo ${NAMESPACE}"
+      script {
+        if (params.ENV_NAMESPACE == 'Green') {
+          sh "chmod +x -R ${env.WORKSPACE}"
+          sh ("sh ./pre-deploy.sh $IBM_ENTITLEMENT_KEY ${params.ENV_NAMESPACE} $OC_LOGIN $OC_LOGIN_NEW")
+          sh ('rm -rf ./validation-flow')
+        } 
+        if (params.ENV_NAMESPACE == 'Blue') {
+          sh "chmod +x -R ${env.WORKSPACE}"
+          sh ("sh ./pre-deploy.sh $IBM_ENTITLEMENT_KEY ${params.ENV_NAMESPACE} $OC_LOGIN $OC_LOGIN_NEW")
+          sh ('rm -rf ./blue-green-test6')
+        }
+
+      }
+    sleep 3
+    }
+  }
+  
+  stage('Generate YAML Files') {
+    steps {
+    //Execute migrate-backup.sh
+      script {
+        if (params.ENV_NAMESPACE == 'Green') {
+          sh ("sh ./migrate-backup.sh validation-flow.zip")
+          sleep 3
+        } 
+        if (params.ENV_NAMESPACE == 'Blue') {
+          sh ("sh ./migrate-backup.sh blue-green-test6.zip")
+          sleep 3
+        } 
+      }
+    }
+  }
+  
+  stage('Deploying YAML Files') {
+    steps {
+      script {
+        // If the Green env is being deployed
+        if (params.ENV_NAMESPACE == 'Green') {
+          //apply default yaml files
+          sh "oc apply -f ./validation-flow/validation-flow-output/default-cfg.yaml -n sce-test2"
+          sleep 5
+          sh "oc apply -f ./validation-flow/validation-flow-output/default-local.yaml -n sce-test2"
+          sleep 5
+          
+          //Apply DataPower Service
+          sh "oc apply -f ./validation-flow/validation-flow-output/validation-flow-dps.yaml"
+          sleep 5
+
+          //Apply Services
+          sh "oc apply -f ./validation-flow/validation-flow-output/validation-flow-service.yaml"
+          sleep 5
+
+          //Apply Routes
+          sh "oc apply -f ./validation-flow/validation-flow-output/validation-flow-9090-route.yaml"
+          sleep 5
+          sh "oc apply -f ./validation-flow/validation-flow-output/validation-flow-8001-route.yaml"
+          sleep 2
+        }
+
+        // if the blue env is being deployed
+        if (params.ENV_NAMESPACE == 'Blue') {
+          //apply default yaml files
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/default-cfg.yaml -n sce-test2"
+          sleep 2
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/default-local.yaml -n sce-test2"
+          sleep 2
+          
+          //Apply DataPower Service
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/blue-green-test6-dps.yaml"
+          sleep 2
+
+          //Apply Services
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/blue-green-test6-service.yaml"
+          sleep 2
+
+          //Apply Routes
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/blue-green-test6-9092-route.yaml"
+          sleep 2
+          sh "oc apply -f ./blue-green-test6/blue-green-test6-output/blue-green-test6-8002-route.yaml"
+          sleep 2
+        }
+      }
+    }
+  }
+}
+}
